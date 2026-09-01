@@ -25,10 +25,55 @@ const MIME = {
 };
 const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 const MAX_PLAYERS = 4;
+const MAX_ROOMS = 1000;
+const MAX_SESSIONS = 5000;
+const MAX_CONNECTIONS_PER_IP = 40;
+const MESSAGE_WINDOW_MS = 10 * 1000;
+const MAX_MESSAGES_PER_WINDOW = 120;
+const ROOM_OP_WINDOW_MS = 60 * 1000;
+const MAX_ROOM_OPS_PER_WINDOW = 30;
 let BOT_DELAY = 900; // 机器人行动延迟(毫秒),测试可调小
 
 const rooms = new Map(); // code -> room
 const sessions = new Map(); // playerId -> { token, roomCode }
+
+function setSecurityHeaders(res) {
+  res.setHeader('content-security-policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
+  res.setHeader('x-content-type-options', 'nosniff');
+  res.setHeader('x-frame-options', 'DENY');
+  res.setHeader('referrer-policy', 'no-referrer');
+  res.setHeader('permissions-policy', 'camera=(), microphone=(), geolocation=()');
+}
+
+function sameOrigin(origin, req) {
+  // Origin 缺失时允许非浏览器客户端；浏览器发送 Origin 时必须与 Host 一致。
+  if (!origin) return true;
+  try {
+    const parsed = new URL(origin);
+    return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && parsed.host === req.headers.host;
+  } catch {
+    return false;
+  }
+}
+
+function clientIp(req, trustProxy) {
+  if (trustProxy) {
+    const forwarded = req.headers['x-forwarded-for'];
+    if (typeof forwarded === 'string' && forwarded.trim()) return forwarded.split(',')[0].trim();
+  }
+  return req.socket.remoteAddress || 'unknown';
+}
+
+function consumeRate(map, key, limit, windowMs) {
+  const now = Date.now();
+  let entry = map.get(key);
+  if (!entry || now - entry.startedAt >= windowMs) {
+    entry = { startedAt: now, count: 0 };
+    map.set(key, entry);
+  }
+  entry.count += 1;
+  return entry.count <= limit;
+}
 
 function randCode() {
   let s = '';
@@ -128,35 +173,48 @@ function closeRoom(room, reason) {
 // ---------------------------------------------------------------- http
 
 function serveStatic(req, res) {
-  let urlPath = decodeURIComponent(req.url.split('?')[0]);
+  setSecurityHeaders(res);
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    res.writeHead(405, { allow: 'GET, HEAD' });
+    res.end();
+    return;
+  }
+
+  let urlPath;
+  try {
+    urlPath = decodeURIComponent(req.url.split('?')[0]);
+  } catch {
+    res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end('bad request');
+    return;
+  }
+  if (urlPath.includes('\0')) {
+    res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end('bad request');
+    return;
+  }
   if (urlPath === '/') urlPath = '/index.html';
   if (urlPath === '/healthz') {
     res.writeHead(200, { 'content-type': 'text/plain' });
     res.end('ok');
     return;
   }
+  // 房间码属于访问凭据，不提供公开的房间枚举/调试接口。
   if (urlPath === '/debug/rooms') {
-    const info = [...rooms.values()].map((r) => ({
-      code: r.code,
-      phase: r.phase,
-      gamePhase: r.game ? r.game.phase : null,
-      current: r.game ? r.game.current : null,
-      currentIsBot: r.game ? !!(r.players[r.game.current] && r.players[r.game.current].isBot) : null,
-      pending: r.game && r.game.pending ? Object.keys(r.game.pending) : null,
-      turnNo: r.game ? r.game.turnNo : null,
-      players: r.players.map((p) => ({ name: p.name, seat: p.seat, bot: !!p.isBot, connected: p.isBot || p.connected })),
-      idleSec: Math.round((Date.now() - r.updatedAt) / 1000),
-      botTimerPending: !!r.botTimer,
-      botFails: r.botFails || 0
-    }));
-    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify(info, null, 2));
+    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end('not found');
     return;
   }
   let filePath;
   if (urlPath === '/data/cards.json') filePath = path.join(ROOT, 'data', 'cards.json');
-  else filePath = path.join(ROOT, 'public', path.normalize(urlPath));
-  if (!filePath.startsWith(path.join(ROOT, 'public')) && !filePath.startsWith(path.join(ROOT, 'data'))) {
+  else filePath = path.resolve(path.join(ROOT, 'public'), '.' + path.normalize(urlPath));
+  const publicRoot = path.join(ROOT, 'public');
+  const dataRoot = path.join(ROOT, 'data');
+  const inRoot = (root) => {
+    const relative = path.relative(root, filePath);
+    return relative === '' || (!relative.startsWith('..' + path.sep) && relative !== '..' && !path.isAbsolute(relative));
+  };
+  if (!inRoot(publicRoot) && !inRoot(dataRoot)) {
     res.writeHead(403);
     res.end();
     return;
@@ -168,7 +226,7 @@ function serveStatic(req, res) {
       return;
     }
     res.writeHead(200, { 'content-type': MIME[path.extname(filePath)] || 'application/octet-stream' });
-    res.end(data);
+    res.end(req.method === 'HEAD' ? undefined : data);
   });
 }
 
@@ -212,12 +270,20 @@ function handleMessage(ws, msg) {
 }
 
 function handleHello(ws, msg) {
+  if (ws.playerId) {
+    return send(ws, { type: P.S.ERROR, code: P.ERR.BAD_REQUEST, message: '连接已完成身份初始化' });
+  }
   let session = null;
   if (msg.playerId && sessions.has(msg.playerId)) {
     const s = sessions.get(msg.playerId);
     if (s.token === msg.token) session = s;
   }
   if (!session) {
+    if (sessions.size >= MAX_SESSIONS) {
+      send(ws, { type: P.S.ERROR, code: P.ERR.BAD_REQUEST, message: '服务器繁忙，请稍后重试' });
+      ws.close(1013, 'server busy');
+      return;
+    }
     const playerId = crypto.randomUUID();
     const token = crypto.randomBytes(16).toString('hex');
     sessions.set(playerId, { token, roomCode: null });
@@ -250,7 +316,9 @@ function handleHello(ws, msg) {
 }
 
 function kickFromCurrentRoom(ws) {
-  const room = ws.roomCode ? rooms.get(ws.roomCode) : null;
+  const session = sessions.get(ws.playerId);
+  const code = ws.roomCode || (session && session.roomCode);
+  const room = code ? rooms.get(code) : null;
   if (!room) return;
   const p = findPlayer(room, ws.playerId);
   if (p) {
@@ -262,6 +330,15 @@ function kickFromCurrentRoom(ws) {
 }
 
 function handleCreateRoom(ws, msg) {
+  const session = sessions.get(ws.playerId);
+  const currentCode = ws.roomCode || (session && session.roomCode);
+  const currentRoom = currentCode ? rooms.get(currentCode) : null;
+  if (currentRoom && currentRoom.phase === 'playing') {
+    return send(ws, { type: P.S.ERROR, code: P.ERR.GAME_IN_PROGRESS, message: '对局进行中，不能创建其他房间' });
+  }
+  if (rooms.size >= MAX_ROOMS) {
+    return send(ws, { type: P.S.ERROR, code: P.ERR.BAD_REQUEST, message: '房间数量已达上限，请稍后重试' });
+  }
   kickFromCurrentRoom(ws);
   const options = {
     cities: !!(msg.options && msg.options.cities),
@@ -317,6 +394,12 @@ function handleJoinRoom(ws, msg) {
     sendRoomSnapshot(room);
     sendGameSnapshots(room);
     return;
+  }
+  const session = sessions.get(ws.playerId);
+  const currentCode = ws.roomCode || (session && session.roomCode);
+  const currentRoom = currentCode ? rooms.get(currentCode) : null;
+  if (currentRoom && currentRoom.code !== code && currentRoom.phase === 'playing') {
+    return send(ws, { type: P.S.ERROR, code: P.ERR.GAME_IN_PROGRESS, message: '对局进行中，不能加入其他房间' });
   }
   if (room.phase !== 'lobby') return send(ws, { type: P.S.ERROR, code: P.ERR.GAME_IN_PROGRESS, message: '游戏已开始,无法加入' });
   if (room.players.length >= MAX_PLAYERS) return send(ws, { type: P.S.ERROR, code: P.ERR.ROOM_FULL, message: '房间已满' });
@@ -605,7 +688,11 @@ function errorText(code) {
 
 function handleDisconnect(ws) {
   const room = ws.roomCode ? rooms.get(ws.roomCode) : null;
-  if (!room) return;
+  if (!room) {
+    const session = sessions.get(ws.playerId);
+    if (session && !session.roomCode) sessions.delete(ws.playerId);
+    return;
+  }
   const p = findPlayer(room, ws.playerId);
   if (!p || p.ws !== ws) return;
   p.ws = null;
@@ -616,20 +703,51 @@ function handleDisconnect(ws) {
 
 // ---------------------------------------------------------------- 启动
 
-function startServer({ port = 0, host = '0.0.0.0', botDelay } = {}) {
+function startServer({ port = 0, host = '0.0.0.0', botDelay, trustProxy = false } = {}) {
   if (botDelay !== undefined) BOT_DELAY = botDelay;
   const server = http.createServer(serveStatic);
-  const wss = new WebSocketServer({ server, maxPayload: 32 * 1024 });
+  const connectionCounts = new Map();
+  const roomOpRates = new Map();
+  const wss = new WebSocketServer({
+    server,
+    maxPayload: 32 * 1024,
+    verifyClient: ({ origin, req }) => {
+      if (!sameOrigin(origin, req)) return false;
+      const ip = clientIp(req, trustProxy);
+      return (connectionCounts.get(ip) || 0) < MAX_CONNECTIONS_PER_IP;
+    }
+  });
 
-  wss.on('connection', (ws) => {
+  wss.on('connection', (ws, req) => {
+    ws.clientIp = clientIp(req, trustProxy);
+    connectionCounts.set(ws.clientIp, (connectionCounts.get(ws.clientIp) || 0) + 1);
+    ws.messageWindowStartedAt = Date.now();
+    ws.messageCount = 0;
     ws.isAlive = true;
     ws.on('pong', () => (ws.isAlive = true));
     ws.on('message', (raw) => {
+      const now = Date.now();
+      if (now - ws.messageWindowStartedAt >= MESSAGE_WINDOW_MS) {
+        ws.messageWindowStartedAt = now;
+        ws.messageCount = 0;
+      }
+      ws.messageCount += 1;
+      if (ws.messageCount > MAX_MESSAGES_PER_WINDOW) {
+        ws.close(1008, 'rate limit');
+        return;
+      }
       let msg;
       try {
         msg = JSON.parse(raw.toString());
       } catch {
         return send(ws, { type: P.S.ERROR, code: P.ERR.BAD_REQUEST, message: '消息格式错误' });
+      }
+      if (!msg || typeof msg !== 'object' || Array.isArray(msg)) {
+        return send(ws, { type: P.S.ERROR, code: P.ERR.BAD_REQUEST, message: '消息格式错误' });
+      }
+      if ((msg.type === P.C.CREATE_ROOM || msg.type === P.C.JOIN_ROOM) &&
+          !consumeRate(roomOpRates, ws.clientIp, MAX_ROOM_OPS_PER_WINDOW, ROOM_OP_WINDOW_MS)) {
+        return send(ws, { type: P.S.ERROR, code: P.ERR.BAD_REQUEST, message: '操作过于频繁，请稍后重试' });
       }
       try {
         handleMessage(ws, msg);
@@ -638,7 +756,12 @@ function startServer({ port = 0, host = '0.0.0.0', botDelay } = {}) {
         send(ws, { type: P.S.ERROR, code: P.ERR.BAD_REQUEST, message: '服务器内部错误' });
       }
     });
-    ws.on('close', () => handleDisconnect(ws));
+    ws.on('close', () => {
+      const count = (connectionCounts.get(ws.clientIp) || 1) - 1;
+      if (count > 0) connectionCounts.set(ws.clientIp, count);
+      else connectionCounts.delete(ws.clientIp);
+      handleDisconnect(ws);
+    });
     ws.on('error', () => {});
   });
 
@@ -656,6 +779,9 @@ function startServer({ port = 0, host = '0.0.0.0', botDelay } = {}) {
 
   const cleaner = setInterval(() => {
     const now = Date.now();
+    for (const [ip, rate] of roomOpRates) {
+      if (now - rate.startedAt >= ROOM_OP_WINDOW_MS) roomOpRates.delete(ip);
+    }
     for (const room of rooms.values()) {
       const idle = now - room.updatedAt;
       if (room.phase === 'lobby' && idle > 30 * 60 * 1000) {
@@ -686,7 +812,8 @@ function startServer({ port = 0, host = '0.0.0.0', botDelay } = {}) {
 
 if (require.main === module) {
   const port = Number(process.env.PORT) || 3000;
-  startServer({ port }).then(({ port: actual }) => {
+  const trustProxy = process.env.TRUST_PROXY === '1';
+  startServer({ port, trustProxy }).then(({ port: actual }) => {
     console.log(`璀璨宝石已启动: http://localhost:${actual}  (PORT 环境变量可改端口)`);
   });
 }
