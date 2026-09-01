@@ -13,7 +13,7 @@ const COLORS = P.COLORS;
 
 test('E2E:3 玩家双扩展,视角驱动随机对局打到终局并再开一局', async () => {
   const srv = await startServer({ port: 0, host: '127.0.0.1' });
-  const url = `ws://127.0.0.1:${srv.port}`;
+  const url = `ws://127.0.0.1:${srv.port}/ws`;
   const rng = mulberry32(20260831);
   const bots = [new Bot(url, '甲'), new Bot(url, '乙'), new Bot(url, '丙')];
 

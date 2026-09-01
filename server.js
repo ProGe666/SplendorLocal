@@ -172,7 +172,7 @@ function closeRoom(room, reason) {
 
 // ---------------------------------------------------------------- http
 
-function serveStatic(req, res) {
+function serveStatic(req, res, isReady = () => true) {
   setSecurityHeaders(res);
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     res.writeHead(405, { allow: 'GET, HEAD' });
@@ -194,9 +194,15 @@ function serveStatic(req, res) {
     return;
   }
   if (urlPath === '/') urlPath = '/index.html';
-  if (urlPath === '/healthz' || urlPath === '/readyz') {
-    res.writeHead(200, { 'content-type': 'text/plain' });
+  if (urlPath === '/healthz') {
+    res.writeHead(200, { 'content-type': 'text/plain', 'cache-control': 'no-store' });
     res.end('ok');
+    return;
+  }
+  if (urlPath === '/readyz') {
+    const ready = isReady();
+    res.writeHead(ready ? 200 : 503, { 'content-type': 'text/plain', 'cache-control': 'no-store' });
+    res.end(ready ? 'ready' : 'stopping');
     return;
   }
   // 房间码属于访问凭据，不提供公开的房间枚举/调试接口。
@@ -225,7 +231,12 @@ function serveStatic(req, res) {
       res.end('not found');
       return;
     }
-    res.writeHead(200, { 'content-type': MIME[path.extname(filePath)] || 'application/octet-stream' });
+    const ext = path.extname(filePath);
+    const revalidate = ['.html', '.js', '.css', '.json', '.webmanifest'].includes(ext);
+    res.writeHead(200, {
+      'content-type': MIME[ext] || 'application/octet-stream',
+      'cache-control': revalidate ? 'no-cache' : 'public, max-age=86400'
+    });
     res.end(req.method === 'HEAD' ? undefined : data);
   });
 }
@@ -705,7 +716,8 @@ function handleDisconnect(ws) {
 
 function startServer({ port = 0, host = '0.0.0.0', botDelay, trustProxy = false } = {}) {
   if (botDelay !== undefined) BOT_DELAY = botDelay;
-  const server = http.createServer(serveStatic);
+  let ready = false;
+  const server = http.createServer((req, res) => serveStatic(req, res, () => ready));
   // 限制慢请求占用连接；WebSocket upgrade 不受 requestTimeout 影响。
   server.requestTimeout = 15 * 1000;
   server.headersTimeout = 10 * 1000;
@@ -715,6 +727,7 @@ function startServer({ port = 0, host = '0.0.0.0', botDelay, trustProxy = false 
   const roomOpRates = new Map();
   const wss = new WebSocketServer({
     server,
+    path: '/ws',
     maxPayload: 32 * 1024,
     verifyClient: ({ origin, req }) => {
       if (!sameOrigin(origin, req)) return false;
@@ -801,6 +814,7 @@ function startServer({ port = 0, host = '0.0.0.0', botDelay, trustProxy = false 
   if (cleaner.unref) cleaner.unref();
 
   const stop = async () => {
+    ready = false;
     for (const ws of wss.clients) ws.terminate();
     await new Promise((resolve) => wss.close(() => resolve()));
     clearInterval(heartbeat);
@@ -810,6 +824,7 @@ function startServer({ port = 0, host = '0.0.0.0', botDelay, trustProxy = false 
 
   return new Promise((resolve) => {
     server.listen(port, host, () => {
+      ready = true;
       resolve({ server, wss, rooms, sessions, port: server.address().port, stop });
     });
   });

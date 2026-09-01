@@ -20,7 +20,7 @@ npm start          # 默认 3000 端口,PORT 环境变量可改
 
 ## 部署到 Zeabur
 
-`zeabur-v1` 分支用于公网部署。服务已经支持 Zeabur 动态端口、同端口 WebSocket、健康检查和 `SIGTERM` 优雅停机。
+`zeabur-v1` 分支用于公网部署。服务已经支持 Zeabur 动态端口、`/ws` WebSocket 入口、健康检查和 `SIGTERM` 优雅停机。
 
 1. 把仓库推送到 GitHub,在 Zeabur 创建项目并选择 **Deploy New Service → Git**。
 2. 选择仓库和 `zeabur-v1` 分支。Zeabur 会自动使用仓库内的 `Dockerfile`。
@@ -34,6 +34,7 @@ npm start          # 默认 3000 端口,PORT 环境变量可改
 - 发布新版本或实例重启会清空正在进行的房间，首版上线前应在群里提示玩家。
 - `TRUST_PROXY=1` 只应在流量必须经过 Zeabur 代理时使用，不要同时暴露可绕过代理的容器端口。
 - 不需要单独开放 WebSocket 端口，HTTP 与 WebSocket 共用 Zeabur 提供的域名和端口。
+- 环境变量示例见 `.env.example`，不要把真实凭据写入仓库。
 
 ## 测试
 

@@ -12,7 +12,7 @@ const COLORS = P.COLORS;
 
 test('机器人:添加/移除/权限校验,1人+机器人完整对局', async () => {
   const srv = await startServer({ port: 0, host: '127.0.0.1', botDelay: 20 });
-  const url = `ws://127.0.0.1:${srv.port}`;
+  const url = `ws://127.0.0.1:${srv.port}/ws`;
   const rng = mulberry32(77);
   const A = new Bot(url, '独狼');
   const B = new Bot(url, '路人');

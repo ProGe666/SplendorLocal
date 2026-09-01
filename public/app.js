@@ -191,7 +191,7 @@ function send(obj) {
 
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}`);
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
   ws.onopen = () => {
     $('conn-badge').classList.add('hidden');
     reconnectDelay = 600;

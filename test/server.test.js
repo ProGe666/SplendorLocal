@@ -10,7 +10,7 @@ let base = null;
 
 test.before(async () => {
   const s = await startServer({ port: 0, host: '127.0.0.1' });
-  base = `ws://127.0.0.1:${s.port}`;
+  base = `ws://127.0.0.1:${s.port}/ws`;
   test._server = s;
 });
 
