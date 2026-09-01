@@ -70,10 +70,60 @@ test('HTTP:healthz 与卡牌数据可访问', async () => {
   const s = test._server;
   const h = await fetch(`http://127.0.0.1:${s.port}/healthz`);
   assert.equal(h.status, 200);
+  assert.equal(h.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal(h.headers.get('x-frame-options'), 'DENY');
+  assert.match(h.headers.get('content-security-policy'), /frame-ancestors 'none'/);
   const j = await fetch(`http://127.0.0.1:${s.port}/data/cards.json`);
   assert.equal(j.status, 200);
   const db = await j.json();
   assert.equal(Object.keys(db.cards).length, 90);
+
+  const malformed = await fetch(`http://127.0.0.1:${s.port}/%`);
+  assert.equal(malformed.status, 400);
+  const afterMalformed = await fetch(`http://127.0.0.1:${s.port}/healthz`);
+  assert.equal(afterMalformed.status, 200, '非法 URL 不应导致服务进程退出');
+
+  const debug = await fetch(`http://127.0.0.1:${s.port}/debug/rooms`);
+  assert.equal(debug.status, 404);
+});
+
+test('WebSocket:拒绝跨站浏览器连接', async () => {
+  const ws = new WebSocket(base, { origin: 'https://evil.example' });
+  const status = await new Promise((resolve, reject) => {
+    ws.once('unexpected-response', (_req, res) => {
+      res.resume();
+      resolve(res.statusCode);
+    });
+    ws.once('open', () => reject(new Error('跨站 WebSocket 不应连接成功')));
+    ws.once('error', () => {});
+  });
+  assert.equal(status, 401);
+});
+
+test('WebSocket:单连接只能初始化一次，未入房 session 在断开后清理', async () => {
+  const before = test._server.sessions.size;
+  const C = new Client('临时');
+  await C.opened();
+  C.send(null);
+  const malformed = await C.awaitMsg(P.S.ERROR);
+  assert.equal(malformed.code, P.ERR.BAD_REQUEST);
+
+  C.send({ type: P.C.HELLO, name: '临时' });
+  const welcome = await C.awaitMsg(P.S.WELCOME);
+  assert.equal(test._server.sessions.size, before + 1);
+
+  C.send({ type: P.C.HELLO, playerId: welcome.playerId, token: welcome.token });
+  const repeated = await C.awaitMsg(P.S.ERROR);
+  assert.equal(repeated.code, P.ERR.BAD_REQUEST);
+  assert.equal(test._server.sessions.size, before + 1);
+
+  const closed = new Promise((resolve) => C.ws.once('close', resolve));
+  C.close();
+  await closed;
+  for (let i = 0; i < 20 && test._server.sessions.size !== before; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(test._server.sessions.size, before);
 });
 
 test('完整流程:建房、加入、开局、轮流行动、预留隐藏、断线重连', async () => {
@@ -188,6 +238,25 @@ test('对局中离开=挂起保留座位;房主可作废本局', async () => {
   await Promise.all([H.awaitMsg(P.S.ROOM), G.awaitMsg(P.S.ROOM)]);
   await Promise.all([H.awaitMsg(P.S.GAME), G.awaitMsg(P.S.GAME)]);
 
+  // 普通玩家不能用“创建新房间”旁路作废正在进行的对局
+  G.send({ type: P.C.CREATE_ROOM, options: {} });
+  const createDuringGame = await G.awaitMsg(P.S.ERROR);
+  assert.equal(createDuringGame.code, P.ERR.GAME_IN_PROGRESS);
+  assert.equal(test._server.rooms.get(roomMsg.code).phase, 'playing');
+  assert.equal(test._server.rooms.get(roomMsg.code).players.length, 2);
+
+  // 同一旁路也不能通过加入其他大厅触发
+  const D = new Client('另一房主');
+  await D.opened();
+  D.send({ type: P.C.HELLO, name: '另一房主' });
+  await D.awaitMsg(P.S.WELCOME);
+  D.send({ type: P.C.CREATE_ROOM, options: {} });
+  const destination = await D.awaitMsg(P.S.ROOM);
+  G.send({ type: P.C.JOIN_ROOM, code: destination.code });
+  const joinDuringGame = await G.awaitMsg(P.S.ERROR);
+  assert.equal(joinDuringGame.code, P.ERR.GAME_IN_PROGRESS);
+  assert.equal(test._server.rooms.get(roomMsg.code).phase, 'playing');
+
   // 非房主对局中离开 → 挂起,不毁局
   G.send({ type: P.C.LEAVE_ROOM });
   const suspended = await H.awaitMsg(P.S.ROOM);
@@ -221,6 +290,7 @@ test('对局中离开=挂起保留座位;房主可作废本局', async () => {
 
   H.close();
   G.close();
+  D.close();
 });
 
 test('房主校验与扩展开局', async () => {
