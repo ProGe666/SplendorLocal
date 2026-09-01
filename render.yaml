@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: splendor-online-proge666
+    runtime: docker
+    plan: free
+    branch: render-v1
+    healthCheckPath: /readyz
+    autoDeployTrigger: commit
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: TRUST_PROXY
+        value: "1"

@@ -18,22 +18,27 @@ npm start          # 默认 3000 端口,PORT 环境变量可改
 
 同一局域网内手机访问 `http://<电脑IP>:3000` 即可试玩。
 
-## 部署到 Zeabur
+## 免费部署到 Render
 
-`zeabur-v1` 分支用于公网部署。服务已经支持 Zeabur 动态端口、`/ws` WebSocket 入口、健康检查和 `SIGTERM` 优雅停机。
+`render-v1` 分支用于公网试玩。服务支持 Render 动态端口、`/ws` WebSocket、`/readyz` 健康检查和 `SIGTERM` 优雅停机，根目录的 `render.yaml` 已声明 Docker 免费实例。
 
-1. 把仓库推送到 GitHub,在 Zeabur 创建项目并选择 **Deploy New Service → Git**。
-2. 选择仓库和 `zeabur-v1` 分支。Zeabur 会自动使用仓库内的 `Dockerfile`。
-3. 添加环境变量 `TRUST_PROXY=1`;`NODE_ENV=production` 已写入镜像,`PORT` 由平台自动注入。
-4. 在服务的 Networking 页面生成域名或绑定自定义域名,随后用该 HTTPS 地址访问。浏览器会自动使用 WSS。
-5. 健康检查路径可配置为 `/readyz`（`/healthz` 也可用）。
+### 使用 Blueprint 部署
 
-部署约束：
+1. 登录 [Render Dashboard](https://dashboard.render.com/)，授权读取 GitHub 仓库。
+2. 选择 **New → Blueprint**，连接 `ProGe666/SplendorLocal`。
+3. Blueprint 分支选择 `render-v1`，Render 会读取该分支的 `render.yaml`。
+4. 确认实例类型为 **Free**，然后点击 **Deploy Blueprint**。不需要手动设置 `PORT`。
+5. 部署完成后打开服务页面顶部的 `https://...onrender.com` 地址。创建房间后，直接把游戏内生成的邀请链接发给朋友。
 
-- **实例数保持为 1**，不要开启自动横向扩容；房间和 session 当前保存在进程内存中。
-- 发布新版本或实例重启会清空正在进行的房间，首版上线前应在群里提示玩家。
-- `TRUST_PROXY=1` 只应在流量必须经过 Zeabur 代理时使用，不要同时暴露可绕过代理的容器端口。
-- 不需要单独开放 WebSocket 端口，HTTP 与 WebSocket 共用 Zeabur 提供的域名和端口。
+也可以选择 **New → Web Service** 手动部署：分支选 `render-v1`，Runtime 选 Docker，Instance Type 选 Free，环境变量添加 `TRUST_PROXY=1`，Health Check Path 填 `/readyz`。
+
+### 免费实例限制
+
+- Render 官方免费 Web Service 每个 workspace 每月提供 750 小时。
+- 连续 15 分钟没有 HTTP 请求或 WebSocket 消息时会休眠；下一次访问唤醒通常约需 1 分钟。玩家页面打开时，每 25 秒一次的 WebSocket 心跳会维持实例运行。
+- **实例数保持为 1**；房间和 session 当前保存在进程内存中，发布、重启或休眠恢复都可能清空正在进行的房间。
+- 免费实例文件系统是临时的，不能用本地文件代替数据库。
+- HTTP 与 WebSocket 共用 Render 域名，不需要开放额外端口。
 - 环境变量示例见 `.env.example`，不要把真实凭据写入仓库。
 
 ## 测试
