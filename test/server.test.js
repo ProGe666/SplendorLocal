@@ -128,6 +128,29 @@ test('WebSocket:单连接只能初始化一次，未入房 session 在断开后�
   assert.equal(test._server.sessions.size, before);
 });
 
+test('昵称:身份初始化后的输入名用于创建和加入房间', async () => {
+  const A = new Client('甲');
+  const B = new Client('乙');
+  await Promise.all([A.opened(), B.opened()]);
+
+  A.send({ type: P.C.HELLO });
+  const welcomeA = await A.awaitMsg(P.S.WELCOME);
+  assert.match(welcomeA.name, /^玩家/);
+  A.send({ type: P.C.CREATE_ROOM, name: '自定义甲', options: {} });
+  const created = await A.awaitMsg(P.S.ROOM);
+  assert.equal(created.players[0].name, '自定义甲');
+
+  B.send({ type: P.C.HELLO });
+  const welcomeB = await B.awaitMsg(P.S.WELCOME);
+  assert.match(welcomeB.name, /^玩家/);
+  B.send({ type: P.C.JOIN_ROOM, code: created.code, name: '自定义乙' });
+  const joined = await B.awaitMsg(P.S.ROOM);
+  assert.equal(joined.players.find((p) => p.seat === joined.you).name, '自定义乙');
+
+  A.close();
+  B.close();
+});
+
 test('完整流程:建房、加入、开局、轮流行动、预留隐藏、断线重连', async () => {
   const A = new Client('甲');
   const B = new Client('乙');

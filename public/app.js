@@ -125,9 +125,15 @@ const $ = (id) => document.getElementById(id);
 function loadIdentity() {
   try {
     const raw = localStorage.getItem('splendor.identity');
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const identity = JSON.parse(raw);
+      if (typeof identity.nameChosen !== 'boolean') {
+        identity.nameChosen = !!identity.name && !/^玩家[A-Z2-9]{2}$/.test(identity.name);
+      }
+      return identity;
+    }
   } catch {}
-  return { playerId: null, token: null, name: '' };
+  return { playerId: null, token: null, name: '', nameChosen: false };
 }
 
 function saveIdentity() {
@@ -227,17 +233,25 @@ function stopPing() {
 
 function handleMsg(msg) {
   switch (msg.type) {
-    case P.S.WELCOME:
+    case P.S.WELCOME: {
+      const typedName = ($('input-name').value || '').trim();
       me.playerId = msg.playerId;
       me.token = msg.token;
       if (msg.name) me.name = msg.name;
+      if (typedName) {
+        me.name = typedName;
+        me.nameChosen = true;
+      }
       saveIdentity();
       if (pendingJoinCode) {
         const code = pendingJoinCode.toUpperCase();
         pendingJoinCode = null;
-        send({ type: P.C.JOIN_ROOM, code });
+        $('input-code').value = code;
+        if (me.nameChosen) send({ type: P.C.JOIN_ROOM, code, name: me.name });
+        else toast('请输入昵称后加入房间');
       }
       break;
+    }
     case P.S.ROOM:
       room = msg;
       if (msg.phase === 'lobby') {
@@ -1242,7 +1256,7 @@ function renderResult() {
 // ---------------------------------------------------------------- 初始化
 
 function init() {
-  if (me.name) $('input-name').value = me.name;
+  if (me.nameChosen && me.name) $('input-name').value = me.name;
   const savedCode = new URLSearchParams(location.search).get('room');
   if (savedCode) $('input-code').value = savedCode.toUpperCase();
   history.replaceState(null, '', '/');
@@ -1255,10 +1269,11 @@ function init() {
     const name = $('input-name').value.trim();
     if (!name) return toast('请先输入昵称', true);
     me.name = name;
+    me.nameChosen = true;
     saveIdentity();
-    send({ type: P.C.HELLO, name, playerId: me.playerId, token: me.token });
     send({
       type: P.C.CREATE_ROOM,
+      name,
       options: { cities: $('opt-cities').checked, tradingPosts: $('opt-tp').checked }
     });
   });
@@ -1269,12 +1284,12 @@ function init() {
     const name = $('input-name').value.trim();
     if (name && name !== me.name) {
       me.name = name;
+      me.nameChosen = true;
       saveIdentity();
-      send({ type: P.C.HELLO, name, playerId: me.playerId, token: me.token });
-    } else if (!name && !me.name) {
+    } else if (!name && !me.nameChosen) {
       return toast('请先输入昵称', true);
     }
-    send({ type: P.C.JOIN_ROOM, code });
+    send({ type: P.C.JOIN_ROOM, code, name: name || me.name });
   });
 
   $('input-code').addEventListener('keydown', (e) => {

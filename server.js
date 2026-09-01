@@ -341,6 +341,8 @@ function kickFromCurrentRoom(ws) {
 }
 
 function handleCreateRoom(ws, msg) {
+  const requestedName = cleanName(msg.name);
+  if (requestedName) ws.name = requestedName;
   const session = sessions.get(ws.playerId);
   const currentCode = ws.roomCode || (session && session.roomCode);
   const currentRoom = currentCode ? rooms.get(currentCode) : null;
@@ -390,6 +392,8 @@ function handleJoinRoom(ws, msg) {
   const code = typeof msg.code === 'string' ? msg.code.trim().toUpperCase() : '';
   const room = rooms.get(code);
   if (!room) return send(ws, { type: P.S.ERROR, code: P.ERR.ROOM_NOT_FOUND, message: '房间不存在' });
+  const requestedName = cleanName(msg.name);
+  if (requestedName) ws.name = requestedName;
   const existing = findPlayer(room, ws.playerId);
   if (existing) {
     // 离线/暂时离开后经链接回来:重新绑定连接
@@ -399,6 +403,8 @@ function handleJoinRoom(ws, msg) {
     }
     existing.ws = ws;
     existing.connected = true;
+    existing.name = ws.name || existing.name;
+    if (room.game && room.game.players[existing.seat]) room.game.players[existing.seat].name = existing.name;
     ws.roomCode = room.code;
     sessions.set(ws.playerId, { token: ws.token, roomCode: room.code });
     touch(room);
