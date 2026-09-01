@@ -1,0 +1,17 @@
+{
+  "name": "璀璨宝石",
+  "short_name": "璀璨宝石",
+  "description": "和朋友在线开一局璀璨宝石(Splendor)",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#151021",
+  "theme_color": "#171029",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

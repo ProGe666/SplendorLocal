@@ -1,0 +1,17 @@
+{
+  "name": "splendor-online",
+  "version": "1.0.0",
+  "private": true,
+  "description": "璀璨宝石(Splendor)在线多人游戏,手机优先,房间制公网联机",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
