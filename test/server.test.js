@@ -73,6 +73,8 @@ test('HTTP:healthz 与卡牌数据可访问', async () => {
   assert.equal(h.headers.get('x-content-type-options'), 'nosniff');
   assert.equal(h.headers.get('x-frame-options'), 'DENY');
   assert.match(h.headers.get('content-security-policy'), /frame-ancestors 'none'/);
+  const ready = await fetch(`http://127.0.0.1:${s.port}/readyz`);
+  assert.equal(ready.status, 200);
   const j = await fetch(`http://127.0.0.1:${s.port}/data/cards.json`);
   assert.equal(j.status, 200);
   const db = await j.json();

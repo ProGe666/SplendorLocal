@@ -18,14 +18,22 @@ npm start          # 默认 3000 端口,PORT 环境变量可改
 
 同一局域网内手机访问 `http://<电脑IP>:3000` 即可试玩。
 
-## 部署(Zeabur / ClawCloud 等)
+## 部署到 Zeabur
 
-单进程 Node 服务,HTTP 与 WebSocket 同端口,已提供 Dockerfile:
+`zeabur-v1` 分支用于公网部署。服务已经支持 Zeabur 动态端口、同端口 WebSocket、健康检查和 `SIGTERM` 优雅停机。
 
-- 端口:平台注入 `PORT` 环境变量(本地默认 8080)
-- 健康检查:`GET /healthz`
-- 若平台通过可信反向代理转发流量,设置 `TRUST_PROXY=1`,使连接与建房限流按真实客户端 IP 生效;不要在可绕过代理直连的部署中开启
-- **务必单实例部署**(状态在内存中,多副本会导致玩家散落在不同进程);进程重启则对局丢失,适合朋友局
+1. 把仓库推送到 GitHub,在 Zeabur 创建项目并选择 **Deploy New Service → Git**。
+2. 选择仓库和 `zeabur-v1` 分支。Zeabur 会自动使用仓库内的 `Dockerfile`。
+3. 添加环境变量 `TRUST_PROXY=1`;`NODE_ENV=production` 已写入镜像,`PORT` 由平台自动注入。
+4. 在服务的 Networking 页面生成域名或绑定自定义域名,随后用该 HTTPS 地址访问。浏览器会自动使用 WSS。
+5. 健康检查路径可配置为 `/readyz`（`/healthz` 也可用）。
+
+部署约束：
+
+- **实例数保持为 1**，不要开启自动横向扩容；房间和 session 当前保存在进程内存中。
+- 发布新版本或实例重启会清空正在进行的房间，首版上线前应在群里提示玩家。
+- `TRUST_PROXY=1` 只应在流量必须经过 Zeabur 代理时使用，不要同时暴露可绕过代理的容器端口。
+- 不需要单独开放 WebSocket 端口，HTTP 与 WebSocket 共用 Zeabur 提供的域名和端口。
 
 ## 测试
 

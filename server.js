@@ -194,7 +194,7 @@ function serveStatic(req, res) {
     return;
   }
   if (urlPath === '/') urlPath = '/index.html';
-  if (urlPath === '/healthz') {
+  if (urlPath === '/healthz' || urlPath === '/readyz') {
     res.writeHead(200, { 'content-type': 'text/plain' });
     res.end('ok');
     return;
@@ -706,6 +706,11 @@ function handleDisconnect(ws) {
 function startServer({ port = 0, host = '0.0.0.0', botDelay, trustProxy = false } = {}) {
   if (botDelay !== undefined) BOT_DELAY = botDelay;
   const server = http.createServer(serveStatic);
+  // 限制慢请求占用连接；WebSocket upgrade 不受 requestTimeout 影响。
+  server.requestTimeout = 15 * 1000;
+  server.headersTimeout = 10 * 1000;
+  server.keepAliveTimeout = 5 * 1000;
+  server.maxHeadersCount = 100;
   const connectionCounts = new Map();
   const roomOpRates = new Map();
   const wss = new WebSocketServer({
@@ -811,10 +816,32 @@ function startServer({ port = 0, host = '0.0.0.0', botDelay, trustProxy = false 
 }
 
 if (require.main === module) {
-  const port = Number(process.env.PORT) || 3000;
+  const requestedPort = Number(process.env.PORT);
+  const port = Number.isInteger(requestedPort) && requestedPort > 0 && requestedPort <= 65535 ? requestedPort : 3000;
   const trustProxy = process.env.TRUST_PROXY === '1';
-  startServer({ port, trustProxy }).then(({ port: actual }) => {
+  startServer({ port, trustProxy }).then(({ port: actual, stop }) => {
     console.log(`璀璨宝石已启动: http://localhost:${actual}  (PORT 环境变量可改端口)`);
+
+    let stopping = false;
+    const shutdown = async (signal) => {
+      if (stopping) return;
+      stopping = true;
+      console.log(`收到 ${signal}，正在停止服务...`);
+      const forceExit = setTimeout(() => process.exit(1), 10 * 1000);
+      if (forceExit.unref) forceExit.unref();
+      try {
+        await stop();
+        process.exit(0);
+      } catch (err) {
+        console.error('停止服务失败:', err);
+        process.exit(1);
+      }
+    };
+    process.once('SIGTERM', () => shutdown('SIGTERM'));
+    process.once('SIGINT', () => shutdown('SIGINT'));
+  }).catch((err) => {
+    console.error('服务启动失败:', err);
+    process.exit(1);
   });
 }
 

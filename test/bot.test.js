@@ -108,7 +108,9 @@ test('机器人:添加/移除/权限校验,1人+机器人完整对局', async ()
 
     // 对局结束后回到 lobby,机器人仍在房间
     A.send({ type: P.C.RESTART });
-    const roomEnd = await A.awaitMsg(P.S.ROOM);
+    const roomEnd = await A.waitUntil((m) =>
+      m && m.type === P.S.ROOM && m.phase === 'lobby' ? m : false
+    );
     assert.equal(roomEnd.phase, 'lobby');
     assert.equal(roomEnd.players.filter((p) => p.isBot).length, 1);
   } finally {
